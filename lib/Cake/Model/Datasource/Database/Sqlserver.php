@@ -558,17 +558,11 @@ class Sqlserver extends DboSource {
 			case "schema":
 				extract($data);
 
-				foreach ($indexes as $i => $index) {
-					if (preg_match('/PRIMARY KEY/', $index)) {
-						unset($indexes[$i]);
-						break;
-					}
+				if (is_array($columns)) {
+					$columns = "\t" . implode(",\n\t", array_filter($columns));
 				}
-
-				foreach (array('columns', 'indexes') as $var) {
-					if (is_array(${$var})) {
-						${$var} = "\t" . implode(",\n\t", array_filter(${$var}));
-					}
+				if (is_array($indexes)) {
+					$indexes = "\t" . implode("\n", array_filter($indexes));
 				}
 				return trim("CREATE TABLE {$table} (\n{$columns});\n{$indexes}");
 			default:
@@ -708,9 +702,15 @@ class Sqlserver extends DboSource {
 
 		foreach ($indexes as $name => $value) {
 			if ($name === 'PRIMARY') {
-				$join[] = 'PRIMARY KEY (' . $this->name($value['column']) . ')';
-			} elseif (isset($value['unique']) && $value['unique']) {
-				$out = "ALTER TABLE {$table} ADD CONSTRAINT {$name} UNIQUE";
+				$tableUnEscaped = str_replace(array($this->startQuote, $this->endQuote), '', $table);
+				$join[] = "ALTER TABLE {$table} ADD CONSTRAINT PK_{$tableUnEscaped} PRIMARY KEY CLUSTERED (" . $this->name($value['column']) . ');';
+			} else {
+				$name = $this->name($name);
+				$out = "CREATE ";
+				if (!empty($value['unique']) && $value['unique']) {
+					$out .= 'UNIQUE ';
+				}
+				$out .= "INDEX {$name} ON {$table}";
 
 				if (is_array($value['column'])) {
 					$value['column'] = implode(', ', array_map(array(&$this, 'name'), $value['column']));
@@ -718,7 +718,7 @@ class Sqlserver extends DboSource {
 					$value['column'] = $this->name($value['column']);
 				}
 				$out .= "({$value['column']});";
-				$join[] = $out;
+				$join[] = $out;				
 			}
 		}
 		return $join;
@@ -810,4 +810,99 @@ class Sqlserver extends DboSource {
 		return $this->config['schema'];
 	}
 
+/**
+ * Generate a SQL Alter Table syntax for the given Schema comparison
+ *
+ * @param array $compare Result of a CakeSchema::compare()
+ * @param string $table
+ * @return array Array of alter statements to make.
+ */
+	public function alterSchema($compare, $table = null) {
+		if (!is_array($compare)) {
+			return false;
+		}
+		$out = '';
+		$colList = array();
+		$renames = array();
+		foreach ($compare as $curTable => $types) {
+			$indexes = $tableParameters = $colList = array();
+			if (!$table || $table === $curTable) {
+				$out .= 'ALTER TABLE ' . $this->fullTableName($curTable) . " \n";
+				foreach ($types as $type => $column) {
+					if (isset($column['indexes'])) {
+						$indexes[$type] = $column['indexes'];
+						unset($column['indexes']);
+					}
+					if (isset($column['tableParameters'])) {
+						$tableParameters[$type] = $column['tableParameters'];
+						unset($column['tableParameters']);
+					}
+					switch ($type) {
+						case 'add':
+							foreach ($column as $field => $col) {
+								$col['name'] = $field;
+								$alter = 'ADD ' . $this->buildColumn($col);
+								$colList[] = $alter;
+							}
+							break;
+						case 'drop':
+							foreach ($column as $field => $col) {
+								$col['name'] = $field;
+								$colList[] = 'DROP COLUMN ' . $this->name($field);
+							}
+							break;
+						case 'change':
+							foreach ($column as $field => $col) {
+								if (isset($col['name']) && $col['name'] !== $field) {
+									$renames[] = $this->_renameColumn($field, $col['name'], $curTable);
+								}
+								$colList[] = 'ALTER COLUMN ' . $this->buildColumn($col);
+							}
+							break;
+					}
+				}
+				$out .= "\t" . implode(",\n\t", $colList) . ";\n";
+				$out .= implode("\n", $this->_alterIndexes($this->fullTableName($curTable), $indexes));
+				$out = implode("\n", $renames) . $out;
+			}
+		}
+		return $out;
+	}
+
+	protected function _renameColumn($oldName, $newName, $table) {
+		return "EXEC sp_rename @objname = '{$table}.{$oldName}', @newname = '${newName}', @objtype = 'COLUMN';";
+	}
+
+/**
+ * Generate SQL index alteration statements for a table.
+ *
+ * @param string $table Table to alter indexes for
+ * @param array $indexes Indexes to add and drop
+ * @return array Index alteration statements
+ */
+	protected function _alterIndexes($table, $indexes) {
+		$alter = array();
+		if (isset($indexes['drop'])) {
+			foreach ($indexes['drop'] as $name => $value) {
+				if ($name === 'PRIMARY') {
+					$out = "ALTER TABLE {$table} DROP CONSTRAINT ";
+					$tableUnEscaped = str_replace(array($this->startQuote, $this->endQuote), '', $table);
+					$name = 'PK_' . $tableUnEscaped;
+					$out .= $this->name($name);
+					$alter[] = $out . ';';
+				} else {
+					$name = $this->name($name);
+					$out = "DROP INDEX {$name} ON {$table};";
+					$alter[] = $out;
+				}
+			}
+		}
+		if (isset($indexes['add'])) {
+			$add = $this->buildIndex($indexes['add'], $table);
+			foreach ($add as $index) {
+				$alter[] = $index;
+			}
+		}
+		return $alter;
+	}
 }

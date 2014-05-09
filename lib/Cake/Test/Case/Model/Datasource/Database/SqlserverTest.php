@@ -583,19 +583,156 @@ class SqlserverTest extends CakeTestCase {
 		);
 		$result = $this->db->buildIndex($indexes, 'items');
 		$expected = array(
-			'PRIMARY KEY ([id])',
-			'ALTER TABLE items ADD CONSTRAINT client_id UNIQUE([client_id]);'
+			'ALTER TABLE items ADD CONSTRAINT PK_items PRIMARY KEY CLUSTERED ([id]);',
+			'CREATE UNIQUE INDEX [client_id] ON items([client_id]);'
 		);
 		$this->assertEquals($expected, $result);
 
 		$indexes = array('client_id' => array('column' => 'client_id'));
 		$result = $this->db->buildIndex($indexes, 'items');
-		$this->assertSame(array(), $result);
+		$expected = array('CREATE INDEX [client_id] ON items([client_id]);');
+		$this->assertSame($expected, $result);
 
 		$indexes = array('client_id' => array('column' => array('client_id', 'period_id'), 'unique' => 1));
 		$result = $this->db->buildIndex($indexes, 'items');
-		$expected = array('ALTER TABLE items ADD CONSTRAINT client_id UNIQUE([client_id], [period_id]);');
+		$expected = array('CREATE UNIQUE INDEX [client_id] ON items([client_id], [period_id]);');
 		$this->assertEquals($expected, $result);
+	}
+
+/**
+ * test alterSchema on two tables.
+ *
+ * @return void
+ */
+	public function testAlteringTwoTables() {
+		$schema1 = new CakeSchema(array(
+			'name' => 'AlterTest1',
+			'connection' => 'test',
+			'altertest' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'name' => array('type' => 'string', 'null' => false, 'length' => 50),
+			),
+			'other_table' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'name' => array('type' => 'string', 'null' => false, 'length' => 50),
+			)
+		));
+		$schema2 = new CakeSchema(array(
+			'name' => 'AlterTest1',
+			'connection' => 'test',
+			'altertest' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'field_two' => array('type' => 'string', 'null' => false, 'length' => 50),
+			),
+			'other_table' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'field_two' => array('type' => 'string', 'null' => false, 'length' => 50),
+			)
+		));
+		$result = $this->Dbo->alterSchema($schema2->compare($schema1));
+		$this->assertEquals(2, substr_count($result, 'field_two'), 'Too many fields');
+	}
+
+	/**
+	 * testAlterSchemaIndexes method
+	 *
+	 * @group indices
+	 * @return void
+	 */
+	public function testAlterSchemaIndexes() {
+		$this->Dbo->cacheSources = $this->Dbo->testing = false;
+		$unescapedTable = 'altertest';
+		$table = $this->Dbo->fullTableName($unescapedTable);
+
+		$schemaA = new CakeSchema(array(
+			'name' => 'AlterTest1',
+			'connection' => 'test',
+			'altertest' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'name' => array('type' => 'string', 'null' => false, 'length' => 50),
+				'group1' => array('type' => 'integer', 'null' => true),
+				'group2' => array('type' => 'integer', 'null' => true)
+			)));
+		$result = $this->Dbo->createSchema($schemaA);
+		$this->assertContains('[id] int DEFAULT 0 NOT NULL,', $result);
+		$this->assertContains('[name] nvarchar(50) NOT NULL,', $result);
+		$this->assertContains('[group1] int NULL', $result);
+		$this->assertContains('[group2] int NULL', $result);
+
+		//Test that the string is syntactically correct
+		$query = $this->Dbo->getConnection()->prepare($result);
+		$this->assertEquals($query->queryString, $result);
+
+		$schemaB = new CakeSchema(array(
+			'name' => 'AlterTest2',
+			'connection' => 'test',
+			'altertest' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'name' => array('type' => 'string', 'null' => false, 'length' => 50),
+				'group1' => array('type' => 'integer', 'null' => true),
+				'group2' => array('type' => 'integer', 'null' => true),
+				'indexes' => array(
+					'name_idx' => array('column' => 'name', 'unique' => 0),
+					'group_idx' => array('column' => 'group1', 'unique' => 0),
+					'compound_idx' => array('column' => array('group1', 'group2'), 'unique' => 0),
+					'PRIMARY' => array('column' => 'id', 'unique' => 1))
+			)));
+
+		$result = $this->Dbo->alterSchema($schemaB->compare($schemaA));
+		$this->assertContains("ALTER TABLE $table", $result);
+		$this->assertContains("CREATE INDEX [name_idx] ON $table([name]);", $result);
+		$this->assertContains("CREATE INDEX [group_idx] ON $table([group1]);", $result);
+		$this->assertContains("CREATE INDEX [compound_idx] ON $table([group1], [group2]);", $result);
+		$this->assertContains("ALTER TABLE $table ADD CONSTRAINT PK_$unescapedTable PRIMARY KEY CLUSTERED ([id]);", $result);
+
+		//Test that the string is syntactically correct
+		$query = $this->Dbo->getConnection()->prepare($result);
+		$this->assertEquals($query->queryString, $result);
+
+		// Change three indexes, delete one and add another one
+		$schemaC = new CakeSchema(array(
+			'name' => 'AlterTest3',
+			'connection' => 'test',
+			'altertest' => array(
+				'id' => array('type' => 'integer', 'null' => false, 'default' => 0),
+				'name' => array('type' => 'string', 'null' => false, 'length' => 50),
+				'group1' => array('type' => 'integer', 'null' => true),
+				'group2' => array('type' => 'integer', 'null' => true),
+				'indexes' => array(
+					'name_idx' => array('column' => 'name', 'unique' => 1),
+					'group_idx' => array('column' => 'group2', 'unique' => 0),
+					'compound_idx' => array('column' => array('group2', 'group1'), 'unique' => 0),
+					'id_name_idx' => array('column' => array('id', 'name'), 'unique' => 0))
+			)));
+
+		$result = $this->Dbo->alterSchema($schemaC->compare($schemaB));
+		$this->assertContains("ALTER TABLE $table", $result);
+		$this->assertContains("ALTER TABLE $table DROP CONSTRAINT [PK_$unescapedTable]", $result);
+		$this->assertContains("DROP INDEX [name_idx] ON $table;", $result);
+		$this->assertContains("DROP INDEX [group_idx] ON $table;", $result);
+		$this->assertContains("DROP INDEX [compound_idx] ON $table;", $result);
+		$this->assertContains("CREATE INDEX [id_name_idx] ON $table([id], [name]);", $result);
+		$this->assertContains("CREATE UNIQUE INDEX [name_idx] ON $table([name]);", $result);
+		$this->assertContains("CREATE INDEX [group_idx] ON $table([group2]);", $result);
+		$this->assertContains("CREATE INDEX [compound_idx] ON $table([group2], [group1]);", $result);
+
+		$query = $this->Dbo->getConnection()->prepare($result);
+		$this->assertEquals($query->queryString, $result);
+
+		// Compare us to ourself.
+		$this->assertEquals(array(), $schemaC->compare($schemaC));
+
+		// Drop the indexes
+		$result = $this->Dbo->alterSchema($schemaA->compare($schemaC));
+
+		$this->assertContains("ALTER TABLE $table", $result);
+		$this->assertContains("DROP INDEX [id_name_idx] ON $table;", $result);
+		$this->assertContains("DROP INDEX [name_idx] ON $table;", $result);
+		$this->assertContains("DROP INDEX [group_idx] ON $table;", $result);
+		$this->assertContains("DROP INDEX [compound_idx] ON $table;", $result);
+
+		$query = $this->Dbo->getConnection()->prepare($result);
+		$this->assertEquals($query->queryString, $result);
 	}
 
 /**
