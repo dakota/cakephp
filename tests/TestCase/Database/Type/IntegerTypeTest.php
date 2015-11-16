@@ -52,6 +52,9 @@ class IntegerTypeTest extends TestCase
         $result = $this->type->toPHP('2', $this->driver);
         $this->assertSame(2, $result);
 
+        $result = $this->type->toPHP('-2', $this->driver);
+        $this->assertSame(-2, $result);
+
         $result = $this->type->toPHP('2 bears', $this->driver);
         $this->assertSame(2, $result);
 
@@ -108,6 +111,12 @@ class IntegerTypeTest extends TestCase
 
         $result = $this->type->marshal(105, $this->driver);
         $this->assertSame(105, $result);
+
+        $result = $this->type->marshal('-105', $this->driver);
+        $this->assertSame(-105, $result);
+
+        $result = $this->type->marshal(-105, $this->driver);
+        $this->assertSame(-105, $result);
 
         $result = $this->type->marshal('1.25', $this->driver);
         $this->assertSame('1.25', $result);
